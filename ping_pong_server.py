@@ -37,14 +37,25 @@ class PingPongServer:
         Main loop function that activate it.
         :return: None.
         """
+        inputs = [self.server_socket]
+        writers = []
         while True:
             self.server_socket.listen()
-            ready_read, ready_write, ready_exception = select.select([self.server_socket], [], [])
-            if ready_read:
-                (client_socket, client_address) = self.accept_connections()
-                is_received_data, received_data = self.get_client_data(client_socket, client_address)
-                if self.validate_data(is_received_data, received_data, client_socket, client_address):
-                    self.send_response(client_socket, client_address)
+            ready_read, ready_write, ready_exception = select.select(inputs, writers, [])
+            for socket_object in ready_read:
+                if socket_object is self.server_socket:
+                    (client_socket, client_address) = self.accept_connections()
+                    inputs.append(client_socket)
+                else:
+                    is_received_data, received_data = self.get_client_data(socket_object)
+                    if self.validate_data(is_received_data, received_data, socket_object):
+                        writers.append(socket_object)
+                    else:
+                        inputs.remove(socket_object)
+
+            for socket_writer in ready_write:
+                self.send_response(socket_writer)
+                writers.remove(socket_writer)
 
     def accept_connections(self) -> (socket.socket, tuple):
         """
@@ -56,33 +67,24 @@ class PingPongServer:
         logging.log(logging.INFO, f'Accepted client: {client_address}')
         return client_socket, client_address
 
-    def get_client_data(self, client_socket: socket.socket, client_address: tuple) -> (bool, str):
+    def get_client_data(self, client_socket: socket.socket) -> (bool, str):
         """
         Get the client sent data to our server.
         :param client_socket: The client connection socket.
-        :param client_address: The client address.
         :return: Tuple of True or False the client sent data in the timeout range,
                  and the data received.
         """
-        ready_read, ready_write, ready_exception = select.select([client_socket], [], [], self.timeout)
-        if ready_read:
-            received_data = client_socket.recv(PingPongServer.PING_SIZE).decode()
-            logging.log(logging.INFO, f'Got {received_data} from {client_address}')
-            return True, received_data
-        else:
-            client_socket.close()
-            logging.log(logging.INFO,
-                        f'{client_address} did not send data in {self.timeout} seconds, closing connection')
-            return False, PingPongServer.EMPTY_DATA
+        received_data = client_socket.recv(PingPongServer.PING_SIZE).decode()
+        logging.log(logging.INFO, f'Got {received_data} from {client_socket.getpeername()}')
+        return True, received_data
 
     @staticmethod
-    def validate_data(is_received: bool, data: str, client_socket: socket.socket, client_address: tuple) -> bool:
+    def validate_data(is_received: bool, data: str, client_socket: socket.socket) -> bool:
         """
         Data received validation function, ensure the server got the PING_MESSAGE.
         :param is_received: If we got data from the client.
         :param data: The data we got from the client.
         :param client_socket: The client connection socket.
-        :param client_address: The client address.
         :return: True if data equal to PING_MESSAGE else False.
         """
         if is_received and data == PingPongServer.PING_MESSAGE:
@@ -92,21 +94,20 @@ class PingPongServer:
             if is_received:
                 logging.log(logging.INFO,
                             f'Validation failed. Expected {PingPongServer.PING_MESSAGE}, received {data}.')
+                logging.log(logging.INFO, f'Closed connection with {client_socket.getpeername()}')
                 client_socket.close()
-                logging.log(logging.INFO, f'Closed connection with {client_address}')
             return False
 
     @staticmethod
-    def send_response(client_socket: socket.socket, client_address: tuple):
+    def send_response(client_socket: socket.socket):
         """
         Send a response, PONG_MESSAGE to the client.
         :param client_socket: The client connection socket.
-        :param client_address: The client address.
         :return: None.
         """
-        ready_read, ready_write, ready_exception = select.select([], [client_socket], [])
-        if ready_write:
-            client_socket.send(PingPongServer.PONG_MESSAGE.encode())
-            logging.log(logging.INFO, f'Server socket sent {PingPongServer.PONG_MESSAGE}.')
-            client_socket.close()
-            logging.log(logging.INFO, f'Closed connection with {client_address}')
+        client_socket.send(PingPongServer.PONG_MESSAGE.encode())
+        logging.log(logging.INFO, f'Server  sent {client_socket.getpeername()} => {PingPongServer.PONG_MESSAGE}.')
+
+
+server = PingPongServer()
+server.start_server()
