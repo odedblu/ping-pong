@@ -37,25 +37,29 @@ class PingPongServer:
         Main loop function that activate it.
         :return: None.
         """
-        inputs = [self.server_socket]
-        writers = []
+        fd_to_socket = {}
+        poll_object = select.poll()
+        poll_object.register(self.server_socket, select.POLLIN)
+        fd_to_socket[self.server_socket.fileno()] = self.server_socket
+
         while True:
             self.server_socket.listen()
-            ready_read, ready_write, ready_exception = select.select(inputs, writers, [])
-            for socket_object in ready_read:
-                if socket_object is self.server_socket:
+            events_fd = poll_object.poll()
+            for fd, event in events_fd:
+                if fd_to_socket[fd] is self.server_socket:
                     (client_socket, client_address) = self.accept_connections()
-                    inputs.append(client_socket)
+                    poll_object.register(client_socket, select.POLLIN)
+                    fd_to_socket[client_socket.fileno()] = client_socket
                 else:
-                    is_received_data, received_data = self.get_client_data(socket_object)
-                    if self.validate_data(is_received_data, received_data, socket_object):
-                        writers.append(socket_object)
-                    else:
-                        inputs.remove(socket_object)
-
-            for socket_writer in ready_write:
-                self.send_response(socket_writer)
-                writers.remove(socket_writer)
+                    if event == select.POLLIN:
+                        is_received_data, received_data = self.get_client_data(fd_to_socket[fd])
+                        if self.validate_data(is_received_data, received_data, fd_to_socket[fd]):
+                            poll_object.register(fd_to_socket[fd], select.POLLOUT)
+                        else:
+                            poll_object.unregister(fd_to_socket[fd])
+                    elif event == select.POLLOUT:
+                        self.send_response(fd_to_socket[fd])
+                        poll_object.unregister(fd_to_socket[fd])
 
     def accept_connections(self) -> (socket.socket, tuple):
         """
@@ -107,7 +111,3 @@ class PingPongServer:
         """
         client_socket.send(PingPongServer.PONG_MESSAGE.encode())
         logging.log(logging.INFO, f'Server  sent {client_socket.getpeername()} => {PingPongServer.PONG_MESSAGE}.')
-
-
-server = PingPongServer()
-server.start_server()
